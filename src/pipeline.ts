@@ -26,7 +26,7 @@ const drugs: Drug[] = [];
     const openFda = element["openfda"];
 
     // Do not aggregate products that are not represented by openFDA
-    if (openFda == null) { return; }
+    if (openFda == null || Object.keys(openFda).length === 0) { return; }
 
     // Generate a record for the Drug
     const drug = generateDrugFromSource(element);
