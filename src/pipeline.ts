@@ -1,26 +1,22 @@
 import fs from "fs";
 import data from "./data.json" with { type: "json" };
 
-interface Drug {
-    sponsors: string[];
-    applications: string[];
-    brands: string[];
-    generics: string[];
-    manufacturers: string[];
-    ndcCodes: string[];
-    forms: DrugForm[];
-}
-
-interface DrugForm {
-    name: string;
-    route: string;
+interface Compound {
+    description: string;
+    referenceDrug: string;
+    referenceStandard: string;
+    brandName: string;
+    genericNames: string[];
+    activeIngredients: { name: string, strength: string }[];
     dosageForm: string;
+    dosageRoute: string;
     availability: string;
     teCode: string;
-    activeIngredients: { name: string, strength: string }[];
+    ndc: string;
+    applicationNumber: string;
 }
 
-const drugs: Drug[] = [];
+const compounds: Compound[] = [];
 
 (data as any).results.forEach((element: any) => {
     const openFda = element["openfda"];
@@ -28,79 +24,89 @@ const drugs: Drug[] = [];
     // Do not aggregate products that are not represented by openFDA
     if (openFda == null || Object.keys(openFda).length === 0) { return; }
 
-    // Generate a record for the Drug
-    const drug = generateDrugFromSource(element);
-
-    // Use generic name for de-duplication
-    const generics = openFda["generic_name"];
-
-    const existingDrugIndex = drugs.findIndex((drug) => {
-        return drug.generics.includes(generics);
-    });
-    if (existingDrugIndex >= 0) {
-        const existingDrug = drugs[existingDrugIndex];
-        if (existingDrug?.generics !== generics) {
-            console.log("Generics do not match!");
-            return;
-        }
-        const mergedDrug = merge(existingDrug, drug);
-        drugs[existingDrugIndex] = mergedDrug;
-        return;
-    }
-    drugs.push(drug);
+    // Generate compound records
+    compounds.push(...generateCompoundsFromSource(element));
 });
 
-const root = process.cwd();
-if (!fs.existsSync(`${root}/dist`)) {
-    fs.mkdirSync(`${root}/dist`);
-}
-if (fs.existsSync(`${root}/dist/drugs.json`)) {
-    fs.rmSync(`${root}/dist/drugs.json`);
-}
-fs.writeFileSync(`${root}/dist/drugs.json`, JSON.stringify(drugs));
+createFile("drugs.json", JSON.stringify(compounds));
 
-function merge(a: Drug, b: Drug): Drug {
-    function mergeArray<T>(a: T[], b: T[]): T[] {
-        return [...new Set([...a, ...b])]
-    }
-
-    return {
-        sponsors: mergeArray(a.sponsors, b.sponsors),
-        applications: mergeArray(a.applications, b.applications),
-        brands: mergeArray(a.brands, b.brands),
-        generics: mergeArray(a.generics, b.generics),
-        manufacturers: mergeArray(a.manufacturers, b.manufacturers),
-        ndcCodes: mergeArray(a.ndcCodes, b.ndcCodes),
-        forms: mergeArray(a.forms, b.forms),
-    }
-}
-
-function generateDrugFromSource(source: any): Drug {
+function generateCompoundsFromSource(source: any): Compound[] {
     const applicationNumber = source["application_number"];
     const sponsorName = source["sponsor_name"];
     const openFda = source["openfda"];
     const products = source["products"] ?? [];
 
-    const forms = products.reduce((acc: DrugForm[], curr: any) => {
-        const form: DrugForm = {
-            name: curr["brand_name"],
-            route: curr["route"],
-            dosageForm: curr["dosage_form"],
-            availability: curr["marketing_status"],
-            teCode: curr["te_code"],
-            activeIngredients: curr["active_ingredients"],
-        };
-        acc.push(form);
-        return acc;
-    }, [] as DrugForm[])
+    const cmpnds: Compound[] = [];
 
-    return {
-        sponsors: [sponsorName],
-        applications: [applicationNumber],
-        brands: openFda["brand_name"] ?? [],
-        generics: openFda["generic_name"] ?? [],
-        manufacturers: openFda["manufacturer_name"] ?? [],
-        ndcCodes: openFda["package_ndc"] ?? [],
-        forms,
+    products.forEach((product: any, idx: number) => {
+        const compoundInLocalCollection = cmpnds.find((compound) => {
+            const brandNameMatch = compound.brandName === product["brand_name"];
+            const activeIngredientMatch = JSON.stringify(compound.activeIngredients) === JSON.stringify(product["active_ingredients"]);
+            return brandNameMatch && activeIngredientMatch;
+        });
+        const compoundInGlobalCollection = compounds.find((compound) => {
+            const brandNameMatch = compound.brandName === product["brand_name"];
+            const activeIngredientMatch = JSON.stringify(compound.activeIngredients) === JSON.stringify(product["active_ingredients"]);
+            return brandNameMatch && activeIngredientMatch;
+        });
+        const compoundUnavailable = product["marketing_status"] === "Discontinued" || product["marketing_status"] === "None (Tentative Approval)";
+
+        if (compoundInGlobalCollection || compoundInLocalCollection || compoundUnavailable) {
+            return;
+        }
+
+        const genericNames = openFda["generic_name"].filter((name: string) => name !== product["brand_name"]);
+
+        cmpnds.push({
+            activeIngredients: product["active_ingredients"],
+            applicationNumber: source["application_number"],
+            availability: product["marketing_status"],
+            brandName: product["brand_name"],
+            description: generateDescription(source, product, genericNames),
+            dosageForm: product["dosage_form"],
+            dosageRoute: product["route"],
+            genericNames,
+            ndc: openFda["product_ndc"][idx],
+            referenceDrug: product["reference_drug"],
+            referenceStandard: product["reference_standard"],
+            teCode: product["te_code"],
+        });
+    });
+
+    return cmpnds;
+}
+
+function createFile(fileName: string, data: string) {
+    const root = process.cwd();
+    if (!fs.existsSync(`${root}/dist`)) {
+        fs.mkdirSync(`${root}/dist`);
     }
+    if (fs.existsSync(`${root}/dist/${fileName}`)) {
+        fs.rmSync(`${root}/dist/${fileName}`);
+    }
+    fs.writeFileSync(`${root}/dist/${fileName}`, data);
+}
+
+function generateDescription(source: any, product: any, generics: string[]): string {
+    const ingredients = product["active_ingredients"].reduce((acc: string[], curr: any) => {
+        acc.push(`${curr.name} with a strength of ${curr.strength}`);
+        return acc;
+    }, []);
+
+    const generic = generics.reduce((acc: string, curr: string, idx: number, arr: string[]) => {
+        if (idx === 0) {
+            acc = curr;
+        } else if (idx === arr.length - 1) {
+            acc = `${acc} and ${curr}`;
+        } else {
+            acc = `${acc}, ${curr},`;
+        }
+        return acc;
+    }, "");
+
+    const meta = `${product["brand_name"]} is a ${product["route"]} medication in ${product["dosage_form"]} form.`;
+    const mix = `It contains the following ingredients: ${ingredients.join(", ")}.`;
+    const alt = generic !== "" ? `This drug is also referred to generically as ${generic}.` : "";
+
+    return `${meta} ${mix} ${alt}`;
 }
