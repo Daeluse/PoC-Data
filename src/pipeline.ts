@@ -31,8 +31,6 @@ const compounds: Compound[] = [];
 createFile("drugs.json", JSON.stringify(compounds));
 
 function generateCompoundsFromSource(source: any): Compound[] {
-    const applicationNumber = source["application_number"];
-    const sponsorName = source["sponsor_name"];
     const openFda = source["openfda"];
     const products = source["products"] ?? [];
 
@@ -57,16 +55,18 @@ function generateCompoundsFromSource(source: any): Compound[] {
 
         const genericNames = openFda["generic_name"].filter((name: string) => name !== product["brand_name"]);
 
+
+
         cmpnds.push({
             activeIngredients: product["active_ingredients"],
-            applicationNumber: source["application_number"],
+            applicationNumber: `${source["application_number"]}-${product["product_number"]}`,
             availability: product["marketing_status"],
             brandName: product["brand_name"],
             description: generateDescription(source, product, genericNames),
             dosageForm: product["dosage_form"],
             dosageRoute: product["route"],
             genericNames,
-            ndc: openFda["product_ndc"][idx],
+            ndc: openFda["product_ndc"][idx] ?? "",
             referenceDrug: product["reference_drug"],
             referenceStandard: product["reference_standard"],
             teCode: product["te_code"],
